@@ -52,6 +52,8 @@ class MainActivity : AppCompatActivity() {
         projectionManager =
             getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
+        binding.version.text = "v${com.remotedroid.app.BuildConfig.VERSION_NAME}  (one-button build)"
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED

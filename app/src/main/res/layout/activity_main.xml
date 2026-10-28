@@ -13,12 +13,21 @@
         android:padding="24dp">
 
         <TextView
+            android:id="@+id/title"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="RemoteDroid"
             android:textSize="28sp"
             android:textStyle="bold"
             android:layout_marginTop="24dp" />
+
+        <TextView
+            android:id="@+id/version"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="v2.0"
+            android:textColor="#6b7280"
+            android:textSize="12sp" />
 
         <TextView
             android:id="@+id/status"
