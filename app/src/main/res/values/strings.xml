@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">RemoteDroid</string>
+    <string name="accessibility_label">RemoteDroid Remote Control</string>
+    <string name="accessibility_description">Lets RemoteDroid perform the taps, swipes, text input and hardware keys you send from your browser. Only active while you are connected.</string>
+</resources>
