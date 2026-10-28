@@ -50,6 +50,22 @@ class RemoteInputService : AccessibilityService() {
         dispatch(path, 0, durationMs.coerceIn(20, 10_000))
     }
 
+    /** Pinch centered at (cx, cy). outward=true zooms in, false zooms out. */
+    fun pinch(cx: Float, cy: Float, outward: Boolean, durationMs: Long = 300) {
+        val near = 60f
+        val far = 320f
+        val startGap = if (outward) near else far
+        val endGap = if (outward) far else near
+        val p1 = Path().apply { moveTo(cx - startGap, cy); lineTo(cx - endGap, cy) }
+        val p2 = Path().apply { moveTo(cx + startGap, cy); lineTo(cx + endGap, cy) }
+        val dur = durationMs.coerceIn(50, 2000)
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(p1, 0, dur))
+            .addStroke(GestureDescription.StrokeDescription(p2, 0, dur))
+            .build()
+        dispatchGesture(gesture, null, null)
+    }
+
     private fun dispatch(path: Path, startTime: Long, durationMs: Long) {
         val stroke = GestureDescription.StrokeDescription(path, startTime, durationMs)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()

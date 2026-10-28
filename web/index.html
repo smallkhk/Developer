@@ -61,6 +61,7 @@
     <button id="resume" class="ghost" disabled>Resume</button>
     <span id="status">idle</span>
     <span id="stats" style="font-size:12px;color:#5b8bf0"></span>
+    <span id="batt" style="font-size:12px;color:#9aa4b2"></span>
   </header>
 
   <main><canvas id="screen" width="2" height="2"></canvas></main>
@@ -75,7 +76,10 @@
       <button class="ghost" data-key="voldown">🔉−</button>
       <button class="ghost" data-key="lock">🔒 Lock</button>
       <button class="ghost" data-key="power">⏻ Power</button>
+      <button class="ghost" id="zoomIn">🔍+</button>
+      <button class="ghost" id="zoomOut">🔍−</button>
     </div>
+    <select id="appList" class="ghost" title="launch an app"><option value="">Apps…</option></select>
     <input id="textbox" placeholder="type text, press Enter to send to focused field" />
     <select id="quality" class="ghost" title="stream quality">
       <option value="auto" selected>Auto</option>
@@ -150,6 +154,7 @@ function onControl(msg) {
     case 'auth_ok':
       setStatus('connected'); setButtons(true);
       ws.send(JSON.stringify({ t: 'keyframe' }));
+      ws.send(JSON.stringify({ t: 'applist' }));
       break;
     case 'auth_fail':
       setStatus('wrong token'); ws.close(); break;
@@ -165,6 +170,18 @@ function onControl(msg) {
       // Phone changed quality on its own; reflect it without firing change.
       $('#quality').value = 'auto';
       setStatus(`auto quality: ${msg.level}`); break;
+    case 'status':
+      $('#batt').textContent = `🔋 ${msg.battery}%${msg.charging ? ' ⚡' : ''}`; break;
+    case 'applist': {
+      const sel = $('#appList');
+      sel.innerHTML = '<option value="">Apps…</option>';
+      for (const a of msg.apps) {
+        const o = document.createElement('option');
+        o.value = a.pkg; o.textContent = a.name;
+        sel.appendChild(o);
+      }
+      setStatus(`${msg.apps.length} apps`); break;
+    }
   }
 }
 
@@ -242,6 +259,23 @@ canvas.addEventListener('pointerup', ev => {
 
 document.querySelectorAll('[data-key]').forEach(b =>
   b.addEventListener('click', () => send({ t: 'key', k: b.dataset.key })));
+
+// Launch an app from the dropdown.
+$('#appList').addEventListener('change', e => {
+  if (e.target.value) { send({ t: 'launch', pkg: e.target.value }); e.target.value = ''; }
+});
+
+// Zoom buttons -> pinch at the center of the screen.
+$('#zoomIn').addEventListener('click', () => send({ t: 'pinch', x: 0.5, y: 0.5, out: true }));
+$('#zoomOut').addEventListener('click', () => send({ t: 'pinch', x: 0.5, y: 0.5, out: false }));
+
+// Mouse wheel over the screen -> short swipe (scroll).
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const p = norm(e);
+  const dy = e.deltaY > 0 ? -0.18 : 0.18; // wheel down scrolls content up
+  send({ t: 'swipe', x1: p.x, y1: p.y, x2: p.x, y2: Math.min(1, Math.max(0, p.y + dy)), ms: 120 });
+}, { passive: false });
 
 $('#textbox').addEventListener('keydown', ev => {
   if (ev.key === 'Enter') { send({ t: 'text', s: ev.target.value }); ev.target.value = ''; }

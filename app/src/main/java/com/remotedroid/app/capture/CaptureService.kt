@@ -64,9 +64,12 @@ class CaptureService : Service(), RelayClient.Events {
     private val autoRunnable = object : Runnable {
         override fun run() {
             if (autoQuality) evaluateAutoQuality()
+            maybeSendStatus()
             main.postDelayed(this, AUTO_INTERVAL_MS)
         }
     }
+
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
 
     private val fileReceiver by lazy { FileReceiver(this) }
     private val main = Handler(Looper.getMainLooper())
@@ -119,6 +122,7 @@ class CaptureService : Service(), RelayClient.Events {
         if (relay == null && relayUrl.isNotBlank()) {
             relay = RelayClient(relayUrl, token, this).also { it.connect() }
         }
+        acquireWakeLock()
         return START_STICKY
     }
 
@@ -154,6 +158,9 @@ class CaptureService : Service(), RelayClient.Events {
             "state" -> sendState()
             "quality" -> main.post { setQuality(msg.optString("level", "medium")) }
             "clipboard" -> main.post { setClipboard(msg.optString("s")) }
+            "pinch" -> input()?.pinch(px(msg, "x"), py(msg, "y"), msg.optBoolean("out", true))
+            "applist" -> sendAppList()
+            "launch" -> launchApp(msg.optString("pkg"))
             "file_begin" -> {
                 val ok = fileReceiver.begin(msg.optString("name"), msg.optLong("size", 0))
                 if (!ok) relay?.sendJson(JSONObject().put("t", "file_error"))
@@ -238,6 +245,47 @@ class CaptureService : Service(), RelayClient.Events {
             restartEncoder()
             relay?.sendJson(JSONObject().put("t", "meta").put("w", screenW).put("h", screenH))
         }
+    }
+
+    /** Send the list of launchable apps to the browser. */
+    private fun sendAppList() {
+        try {
+            val pm = packageManager
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val apps = pm.queryIntentActivities(intent, 0)
+                .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
+                .distinctBy { it.first }
+                .sortedBy { it.second.lowercase() }
+            val arr = org.json.JSONArray()
+            for ((pkg, label) in apps) {
+                arr.put(JSONObject().put("pkg", pkg).put("name", label))
+            }
+            relay?.sendJson(JSONObject().put("t", "applist").put("apps", arr))
+        } catch (e: Exception) { Log.w(TAG, "applist failed", e) }
+    }
+
+    /** Launch an app by package name. */
+    private fun launchApp(pkg: String) {
+        if (pkg.isBlank()) return
+        try {
+            val i = packageManager.getLaunchIntentForPackage(pkg)
+                ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (i != null) startActivity(i)
+        } catch (e: Exception) { Log.w(TAG, "launch failed", e) }
+    }
+
+    /** Periodically report battery + charging state to the browser. */
+    private fun maybeSendStatus() {
+        val relay = relay ?: return
+        if (!relay.isControllerAuthenticated) return
+        try {
+            val bm = getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager
+            val level = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            val charging = bm.isCharging
+            relay.sendJson(
+                JSONObject().put("t", "status").put("battery", level).put("charging", charging)
+            )
+        } catch (e: Exception) { /* ignore */ }
     }
 
     /** Best-effort: put text on the phone's clipboard. */
@@ -326,7 +374,18 @@ class CaptureService : Service(), RelayClient.Events {
         )
     }
 
+    /** Keep the CPU alive so the stream and reconnect survive doze/sleep. */
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        wakeLock = pm.newWakeLock(
+            android.os.PowerManager.PARTIAL_WAKE_LOCK, "RemoteDroid:session"
+        ).also { it.setReferenceCounted(false); it.acquire() }
+    }
+
     private fun stopEverything() {
+        try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Exception) {}
+        wakeLock = null
         try { fileReceiver.abort() } catch (_: Exception) {}
         try { encoder?.stop() } catch (_: Exception) {}
         encoder = null
