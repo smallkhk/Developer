@@ -11,6 +11,58 @@ page. So in production you terminate TLS at a reverse proxy (nginx/Caddy) on
 443 and proxy to the Node process on localhost:8080. Plain `ws://` is fine only
 for a quick LAN test.
 
+## No domain? Use your IP via nip.io (recommended)
+
+You do **not** need to buy a domain. `nip.io` is a free wildcard DNS: the
+hostname `YOUR_IP.nip.io` automatically resolves to `YOUR_IP`. Let's Encrypt
+will happily issue a real certificate for it, so you get proper `wss://` with
+no domain purchase and no app changes.
+
+Example: if your VPS is `203.0.113.45`, your relay URL becomes
+`wss://203.0.113.45.nip.io/<room-name>`.
+
+Follow the **Production install** below exactly, but everywhere it says
+`relay.example.com`, use `YOUR_IP.nip.io` instead. That's the only change.
+
+> If `nip.io` ever misbehaves, `sslip.io` works the same way:
+> `YOUR_IP.sslip.io`.
+
+### Opening the browser controller (secure-context note)
+
+The controller page uses WebCodecs, which browsers only enable in a "secure
+context". Two easy ways to get one:
+
+- **Serve it from localhost on your own computer** (simplest):
+  ```bash
+  cd web
+  python3 -m http.server 9000
+  # open http://localhost:9000  — WebCodecs works, and it can reach wss://
+  ```
+  `http://localhost` counts as secure, and a page there may connect to
+  `wss://YOUR_IP.nip.io/...` with no mixed-content problem.
+
+- **Or host it on the VPS over HTTPS** and open `https://YOUR_IP.nip.io/app`
+  (add an nginx `location /app { root ...; }` serving `web/index.html`).
+
+The phone app needs no such trick — just set its relay URL to
+`wss://YOUR_IP.nip.io/<room>`.
+
+## Plain ws:// fallback (no TLS, trusted networks only)
+
+If you just want to test fast and don't care about encryption, you can skip TLS
+entirely and use `ws://YOUR_IP:8080/<room>`. Two catches:
+
+1. Open the browser controller from `http://localhost:9000` (not `https`), or
+   the browser blocks the insecure socket.
+2. Android blocks cleartext sockets by default, so the app needs
+   `android:usesCleartextTraffic="true"` added to its `<application>` tag (one
+   line) and a rebuild. Tell me if you want this — I'll wire a config that
+   allows cleartext only to your specific IP, which is safer than enabling it
+   globally.
+
+Your traffic (including the app token) is unencrypted in this mode, so only use
+it on a network you trust. The nip.io path above is strongly preferred.
+
 ---
 
 ## Quick start (bare, for a LAN test)
