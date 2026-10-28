@@ -1,7 +1,6 @@
 package com.remotedroid.app.ui
 
 import android.Manifest
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
@@ -17,29 +16,26 @@ import com.remotedroid.app.databinding.ActivityMainBinding
 import com.remotedroid.app.input.RemoteInputService
 
 /**
- * The on-phone setup screen. You enter your relay URL and token, enable remote
- * input once, then tap Start — which is where Android shows the one screen-capture
- * prompt. After that you drive everything from the browser.
+ * Minimal setup screen: one Start button. The relay URL and token are baked in
+ * (config.xml), Fast mode is on by default. Two one-time setup buttons below
+ * handle Accessibility and battery exemption.
  */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var projectionManager: MediaProjectionManager
-    private val prefs by lazy { getSharedPreferences("remotedroid", Context.MODE_PRIVATE) }
+
+    private val relayUrl by lazy { getString(R.string.default_relay_url) }
+    private val token by lazy { getString(R.string.default_token) }
 
     private val projectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val data = result.data
         if (result.resultCode == RESULT_OK && data != null) {
-            CaptureService.start(
-                this, result.resultCode, data,
-                binding.relayUrl.text.toString().trim(),
-                binding.token.text.toString(),
-                binding.fastMode.isChecked
-            )
+            CaptureService.start(this, result.resultCode, data, relayUrl, token, true)
             setRunning(true)
-            binding.status.text = "Session running. You can leave this screen."
+            binding.status.text = "Running — control it from your browser."
         } else {
             binding.status.text = "Screen-capture permission was declined."
         }
@@ -47,7 +43,7 @@ class MainActivity : AppCompatActivity() {
 
     private val notifLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { /* result ignored; capture works regardless, this just enables the notification */ }
+    ) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -56,15 +52,6 @@ class MainActivity : AppCompatActivity() {
         projectionManager =
             getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
-        // Prefill from saved values, falling back to the baked-in defaults
-        // (config.xml) so you don't have to type your relay each install.
-        binding.relayUrl.setText(
-            prefs.getString("relay", null) ?: getString(R.string.default_relay_url)
-        )
-        binding.token.setText(
-            prefs.getString("token", null) ?: getString(R.string.default_token)
-        )
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED
@@ -72,50 +59,39 @@ class MainActivity : AppCompatActivity() {
             notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        binding.accessibilityBtn.setOnClickListener {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
-
-        binding.batteryBtn.setOnClickListener { requestIgnoreBattery() }
-
         binding.startBtn.setOnClickListener {
-            val url = binding.relayUrl.text.toString().trim()
-            if (url.isBlank()) {
-                binding.status.text = "Enter your relay URL first."
+            if (relayUrl.isBlank()) {
+                binding.status.text = "No relay baked in. Rebuild with your relay URL."
                 return@setOnClickListener
             }
-            prefs.edit()
-                .putString("relay", url)
-                .putString("token", binding.token.text.toString())
-                .apply()
-            // This is the one capture prompt Android requires on the phone.
             projectionLauncher.launch(projectionManager.createScreenCaptureIntent())
         }
 
         binding.stopBtn.setOnClickListener {
             CaptureService.stop(this)
             setRunning(false)
-            binding.status.text = "Session stopped."
+            binding.status.text = "Stopped."
         }
+
+        binding.accessibilityBtn.setOnClickListener {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+        binding.batteryBtn.setOnClickListener { requestIgnoreBattery() }
     }
 
     override fun onResume() {
         super.onResume()
-        if (!RemoteInputService.isRunning) {
-            binding.accessibilityBtn.text = "Enable remote input (Accessibility)"
-        } else {
-            binding.accessibilityBtn.text = "Remote input enabled ✓"
-        }
+        binding.accessibilityBtn.text =
+            if (RemoteInputService.isRunning) "1. Remote input enabled ✓"
+            else "1. Enable remote input (Accessibility)"
     }
 
-    /** Ask the OS to stop battery-killing the app (esp. important on Samsung,
-     *  Xiaomi, etc. that aggressively sleep background apps). */
+    /** Ask the OS to stop battery-killing the app (esp. Samsung/Xiaomi). */
     private fun requestIgnoreBattery() {
         try {
             val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
             if (pm.isIgnoringBatteryOptimizations(packageName)) {
                 binding.status.text = "Battery limits already disabled ✓"
-                // Also open the manufacturer sleeping-apps list for good measure.
                 startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
             } else {
                 startActivity(

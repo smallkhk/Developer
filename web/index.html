@@ -4,67 +4,114 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>RemoteDroid Controller</title>
+<meta name="theme-color" content="#0b0e13" />
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
+  :root {
+    color-scheme: dark;
+    --bg: #0b0e13; --panel: #151a22; --panel2: #1d2430; --line: #2a3340;
+    --fg: #eef1f6; --muted: #8b95a6; --accent: #3b82f6; --accent2: #2563eb;
+    --ok: #34d399; --bad: #f87171;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
   body {
-    margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-    background: #0e1116; color: #e6e9ef; display: flex; flex-direction: column;
-    height: 100vh;
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; overflow: hidden;
   }
-  header {
-    display: flex; gap: 8px; align-items: center; padding: 10px 14px;
-    background: #161b22; border-bottom: 1px solid #272e3a; flex-wrap: wrap;
+
+  /* Top bar */
+  .bar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; background: var(--panel);
+    border-bottom: 1px solid var(--line);
   }
-  header input {
-    background: #0e1116; border: 1px solid #272e3a; color: #e6e9ef;
-    padding: 7px 9px; border-radius: 7px; font-size: 13px;
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); transition: background .3s; }
+  .dot.on { background: var(--ok); }
+  .meta { display: flex; gap: 10px; align-items: center; margin-left: auto;
+          font-size: 12px; color: var(--muted); }
+  #stats { color: var(--accent); }
+
+  /* Buttons & inputs */
+  button, select, .filelabel {
+    background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+    padding: 9px 12px; border-radius: 10px; font-size: 14px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+    transition: background .15s, border-color .15s;
   }
-  #url { flex: 1 1 260px; min-width: 180px; }
-  #token { width: 150px; }
-  button {
-    background: #2d6cdf; color: #fff; border: 0; padding: 7px 13px;
-    border-radius: 7px; font-size: 13px; cursor: pointer;
+  button:hover, select:hover, .filelabel:hover { background: #262f3d; }
+  button:active { transform: scale(.97); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  button.primary:hover { background: var(--accent2); }
+  button.icon { padding: 9px 11px; }
+  input[type=text], input[type=password] {
+    background: var(--bg); border: 1px solid var(--line); color: var(--fg);
+    padding: 10px 12px; border-radius: 10px; font-size: 14px; width: 100%;
   }
-  button.ghost { background: #272e3a; }
-  button:disabled { opacity: .45; cursor: default; }
-  #status { font-size: 12px; color: #9aa4b2; margin-left: auto; }
-  main {
-    flex: 1; display: flex; align-items: center; justify-content: center;
-    overflow: hidden; padding: 10px;
+
+  /* Settings drawer (relay url / token) — hidden by default */
+  .settings {
+    display: grid; gap: 8px; padding: 12px 14px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
   }
-  #stage { max-width: 100%; max-height: 100%; }
+  .settings.hidden { display: none; }
+  .settings label { font-size: 12px; color: var(--muted); display: grid; gap: 4px; }
+
+  /* Screen area */
+  main { flex: 1; display: flex; align-items: center; justify-content: center;
+         overflow: hidden; padding: 8px; min-height: 0; }
+  #stage { max-width: 100%; max-height: 100%; display: flex; }
   #screen, #rtcVideo {
-    max-width: 100%; max-height: 100%; background: #000; border-radius: 10px;
-    touch-action: none; cursor: crosshair; box-shadow: 0 8px 40px rgba(0,0,0,.5);
-    display: block;
+    max-width: 100%; max-height: 100%; background: #000; border-radius: 12px;
+    touch-action: none; cursor: crosshair; display: block;
+    box-shadow: 0 10px 50px rgba(0,0,0,.55);
   }
-  footer {
-    display: flex; gap: 8px; padding: 10px 14px; background: #161b22;
-    border-top: 1px solid #272e3a; flex-wrap: wrap; align-items: center;
+
+  /* Bottom controls */
+  footer { background: var(--panel); border-top: 1px solid var(--line); padding: 8px; }
+  .nav { display: flex; gap: 8px; justify-content: center; }
+  .nav button { flex: 1 1 0; justify-content: center; font-size: 18px; max-width: 120px; }
+  .tools {
+    display: flex; gap: 8px; align-items: center; margin-top: 8px;
+    overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin;
   }
-  footer .keys { display: flex; gap: 6px; }
-  #textbox { flex: 1 1 200px; min-width: 140px; }
+  .tools::-webkit-scrollbar { height: 6px; }
+  .tools::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+  #textbox { flex: 1 0 180px; }
+  .filelabel { position: relative; overflow: hidden; }
+  .filelabel input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
   @media (max-width: 640px) {
-    header, footer { gap: 6px; padding: 8px; }
-    button, header input, #textbox, select { font-size: 15px; padding: 9px 11px; }
-    #url { flex: 1 1 100%; }
-    #status { margin-left: 0; }
-    .keys { flex-wrap: wrap; }
+    .bar { padding: 9px 11px; gap: 8px; }
+    .brand span.name { display: none; }         /* keep just the dot on tiny screens */
+    .meta { gap: 7px; }
+    button, select, .filelabel, #textbox { font-size: 15px; padding: 11px 12px; }
+    .nav button { font-size: 20px; }
   }
 </style>
 </head>
 <body>
-  <header>
-    <input id="url" placeholder="wss://your-relay.example/room" />
-    <input id="token" type="password" placeholder="access token" />
-    <button id="connect">Connect</button>
-    <button id="pause" class="ghost" disabled>Pause</button>
-    <button id="resume" class="ghost" disabled>Resume</button>
-    <span id="status">idle</span>
-    <span id="stats" style="font-size:12px;color:#5b8bf0"></span>
-    <span id="batt" style="font-size:12px;color:#9aa4b2"></span>
+  <header class="bar">
+    <div class="brand"><span class="dot" id="dot"></span><span class="name">RemoteDroid</span></div>
+    <div class="meta">
+      <span id="status">idle</span>
+      <span id="stats"></span>
+      <span id="batt"></span>
+    </div>
+    <button id="connect" class="primary">Connect</button>
+    <button id="gear" class="icon" title="relay settings">⚙</button>
   </header>
+
+  <div id="settings" class="settings hidden">
+    <label>Relay URL
+      <input id="url" type="text" placeholder="wss://your-relay/room?k=secret" />
+    </label>
+    <label>Access token
+      <input id="token" type="password" placeholder="access token" />
+    </label>
+  </div>
 
   <main>
     <div id="stage">
@@ -74,32 +121,34 @@
   </main>
 
   <footer>
-    <div class="keys">
-      <button class="ghost" data-key="back">◁ Back</button>
-      <button class="ghost" data-key="home">◯ Home</button>
-      <button class="ghost" data-key="recents">▢ Recents</button>
-      <button class="ghost" data-key="notifications">▾ Notif</button>
-      <button class="ghost" data-key="volup">🔊+</button>
-      <button class="ghost" data-key="voldown">🔉−</button>
-      <button class="ghost" data-key="lock">🔒 Lock</button>
-      <button class="ghost" data-key="power">⏻ Power</button>
-      <button class="ghost" id="zoomIn">🔍+</button>
-      <button class="ghost" id="zoomOut">🔍−</button>
+    <div class="nav">
+      <button data-key="back" title="Back">◁</button>
+      <button data-key="home" title="Home">◯</button>
+      <button data-key="recents" title="Recents">▢</button>
     </div>
-    <select id="appList" class="ghost" title="launch an app"><option value="">Apps…</option></select>
-    <input id="textbox" placeholder="type text, press Enter to send to focused field" />
-    <select id="quality" class="ghost" title="stream quality">
-      <option value="auto" selected>Auto</option>
-      <option value="low">Low</option>
-      <option value="medium">Medium</option>
-      <option value="high">High</option>
-    </select>
-    <button id="clipBtn" class="ghost" title="send the text box to the phone's clipboard">Clipboard</button>
-    <label class="ghost" style="padding:7px 13px;border-radius:7px;cursor:pointer;">
-      Send file<input id="fileInput" type="file" style="display:none" />
-    </label>
-    <button id="recBtn" class="ghost" title="record the stream to a file">● Rec</button>
-    <button id="fsBtn" class="ghost" title="fullscreen">⛶</button>
+    <div class="tools">
+      <input id="textbox" type="text" placeholder="type text, Enter to send" />
+      <select id="quality" title="stream quality">
+        <option value="auto" selected>Auto</option>
+        <option value="low">Low</option>
+        <option value="medium">Medium</option>
+        <option value="high">High</option>
+      </select>
+      <select id="appList" title="launch an app"><option value="">Apps…</option></select>
+      <button id="zoomIn" title="zoom in">🔍+</button>
+      <button id="zoomOut" title="zoom out">🔍−</button>
+      <button data-key="volup" title="volume up">🔊</button>
+      <button data-key="voldown" title="volume down">🔉</button>
+      <button data-key="notifications" title="notifications">🔔</button>
+      <button data-key="lock" title="lock">🔒</button>
+      <button data-key="power" title="power menu">⏻</button>
+      <button id="clipBtn" title="send text to phone clipboard">📋</button>
+      <label class="filelabel" title="send a file to the phone">📎<input id="fileInput" type="file" /></label>
+      <button id="recBtn" title="record to a file">● Rec</button>
+      <button id="fsBtn" title="fullscreen">⛶</button>
+      <button id="pause" disabled title="pause stream">⏸</button>
+      <button id="resume" disabled title="resume stream">▶</button>
+    </div>
   </footer>
 
 <script type="module">
@@ -116,9 +165,15 @@ try {
   url.value = localStorage.getItem('rd_url') || '';
   token.value = localStorage.getItem('rd_token') || '';
 } catch (e) {}
-// When served by the relay itself, default to this same host.
+// Sensible defaults so you don't have to type anything.
 if (!url.value && location.protocol === 'https:')
   url.value = `wss://${location.host}/my-phone`;
+if (!token.value) token.value = '1234';
+
+// Settings gear reveals the relay URL / token.
+$('#gear').addEventListener('click', () => $('#settings').classList.toggle('hidden'));
+
+function setDot(on) { $('#dot').classList.toggle('on', on); }
 
 let ws = null, decoder = null, configBytes = null;
 let deviceW = 0, deviceH = 0, haveKey = false;
@@ -156,14 +211,18 @@ function connect() {
     onVideo(new Uint8Array(ev.data));
   };
 
-  ws.onclose = () => { setStatus('disconnected'); teardownDecoder(); teardownPc(); setButtons(false); };
+  ws.onclose = () => {
+    setStatus('disconnected'); teardownDecoder(); teardownPc();
+    setButtons(false); setDot(false); $('#connect').textContent = 'Connect';
+  };
   ws.onerror = () => setStatus('connection error');
 }
 
 function onControl(msg) {
   switch (msg.t) {
     case 'auth_ok':
-      setStatus('connected'); setButtons(true);
+      setStatus('connected'); setButtons(true); setDot(true);
+      $('#connect').textContent = 'Disconnect';
       ws.send(JSON.stringify({ t: 'keyframe' }));
       ws.send(JSON.stringify({ t: 'applist' }));
       break;
@@ -343,7 +402,15 @@ $('#textbox').addEventListener('keydown', ev => {
   if (ev.key === 'Enter') { send({ t: 'text', s: ev.target.value }); ev.target.value = ''; }
 });
 
-$('#connect').addEventListener('click', connect);
+$('#connect').addEventListener('click', () => {
+  if (ws && ws.readyState === 1) { ws.close(); ws = null; }
+  else connect();
+});
+
+// Auto-connect on load when we already have a relay URL + token.
+if (url.value && token.value && 'VideoDecoder' in window) {
+  setTimeout(connect, 300);
+}
 $('#pause').addEventListener('click', () => send({ t: 'pause' }));
 $('#resume').addEventListener('click', () => send({ t: 'resume' }));
 $('#quality').addEventListener('change', e => send({ t: 'quality', level: e.target.value }));
