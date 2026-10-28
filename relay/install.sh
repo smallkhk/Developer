@@ -255,9 +255,11 @@ cat > "$APP_DIR/public/index.html" <<'__RD_EOF__'
     flex: 1; display: flex; align-items: center; justify-content: center;
     overflow: hidden; padding: 10px;
   }
-  #screen {
+  #stage { max-width: 100%; max-height: 100%; }
+  #screen, #rtcVideo {
     max-width: 100%; max-height: 100%; background: #000; border-radius: 10px;
     touch-action: none; cursor: crosshair; box-shadow: 0 8px 40px rgba(0,0,0,.5);
+    display: block;
   }
   footer {
     display: flex; gap: 8px; padding: 10px 14px; background: #161b22;
@@ -265,6 +267,13 @@ cat > "$APP_DIR/public/index.html" <<'__RD_EOF__'
   }
   footer .keys { display: flex; gap: 6px; }
   #textbox { flex: 1 1 200px; min-width: 140px; }
+  @media (max-width: 640px) {
+    header, footer { gap: 6px; padding: 8px; }
+    button, header input, #textbox, select { font-size: 15px; padding: 9px 11px; }
+    #url { flex: 1 1 100%; }
+    #status { margin-left: 0; }
+    .keys { flex-wrap: wrap; }
+  }
 </style>
 </head>
 <body>
@@ -275,9 +284,16 @@ cat > "$APP_DIR/public/index.html" <<'__RD_EOF__'
     <button id="pause" class="ghost" disabled>Pause</button>
     <button id="resume" class="ghost" disabled>Resume</button>
     <span id="status">idle</span>
+    <span id="stats" style="font-size:12px;color:#5b8bf0"></span>
+    <span id="batt" style="font-size:12px;color:#9aa4b2"></span>
   </header>
 
-  <main><canvas id="screen" width="2" height="2"></canvas></main>
+  <main>
+    <div id="stage">
+      <canvas id="screen" width="2" height="2"></canvas>
+      <video id="rtcVideo" autoplay playsinline muted style="display:none"></video>
+    </div>
+  </main>
 
   <footer>
     <div class="keys">
@@ -285,14 +301,36 @@ cat > "$APP_DIR/public/index.html" <<'__RD_EOF__'
       <button class="ghost" data-key="home">◯ Home</button>
       <button class="ghost" data-key="recents">▢ Recents</button>
       <button class="ghost" data-key="notifications">▾ Notif</button>
+      <button class="ghost" data-key="volup">🔊+</button>
+      <button class="ghost" data-key="voldown">🔉−</button>
+      <button class="ghost" data-key="lock">🔒 Lock</button>
+      <button class="ghost" data-key="power">⏻ Power</button>
+      <button class="ghost" id="zoomIn">🔍+</button>
+      <button class="ghost" id="zoomOut">🔍−</button>
     </div>
+    <select id="appList" class="ghost" title="launch an app"><option value="">Apps…</option></select>
     <input id="textbox" placeholder="type text, press Enter to send to focused field" />
+    <select id="quality" class="ghost" title="stream quality">
+      <option value="auto" selected>Auto</option>
+      <option value="low">Low</option>
+      <option value="medium">Medium</option>
+      <option value="high">High</option>
+    </select>
+    <button id="clipBtn" class="ghost" title="send the text box to the phone's clipboard">Clipboard</button>
+    <label class="ghost" style="padding:7px 13px;border-radius:7px;cursor:pointer;">
+      Send file<input id="fileInput" type="file" style="display:none" />
+    </label>
+    <button id="recBtn" class="ghost" title="record the stream to a file">● Rec</button>
+    <button id="fsBtn" class="ghost" title="fullscreen">⛶</button>
   </footer>
 
 <script type="module">
 const $ = s => document.querySelector(s);
 const url = $('#url'), token = $('#token'), statusEl = $('#status');
 const canvas = $('#screen'), ctx = canvas.getContext('2d');
+const video = $('#rtcVideo'), stage = $('#stage');
+let activeEl = canvas;        // the element currently showing the phone
+let pc = null;                // RTCPeerConnection in Fast (WebRTC) mode
 
 // Remember last-used relay + token locally (per-browser convenience only).
 try {
@@ -305,6 +343,16 @@ if (!url.value && location.protocol === 'https:')
 
 let ws = null, decoder = null, configBytes = null;
 let deviceW = 0, deviceH = 0, haveKey = false;
+let rxBytes = 0, rxFrames = 0;
+
+// Once a second, show throughput + fps so slowdowns are visible.
+setInterval(() => {
+  const statsEl = $('#stats');
+  if (!ws || ws.readyState !== 1) { statsEl.textContent = ''; return; }
+  const kbps = Math.round(rxBytes * 8 / 1000);
+  statsEl.textContent = `${rxFrames} fps · ${kbps} kbps`;
+  rxBytes = 0; rxFrames = 0;
+}, 1000);
 
 function setStatus(t) { statusEl.textContent = t; }
 
@@ -329,7 +377,7 @@ function connect() {
     onVideo(new Uint8Array(ev.data));
   };
 
-  ws.onclose = () => { setStatus('disconnected'); teardownDecoder(); setButtons(false); };
+  ws.onclose = () => { setStatus('disconnected'); teardownDecoder(); teardownPc(); setButtons(false); };
   ws.onerror = () => setStatus('connection error');
 }
 
@@ -338,14 +386,79 @@ function onControl(msg) {
     case 'auth_ok':
       setStatus('connected'); setButtons(true);
       ws.send(JSON.stringify({ t: 'keyframe' }));
+      ws.send(JSON.stringify({ t: 'applist' }));
       break;
     case 'auth_fail':
       setStatus('wrong token'); ws.close(); break;
     case 'meta':
-      deviceW = msg.w; deviceH = msg.h; break;
+      deviceW = msg.w; deviceH = msg.h;
+      setMode(msg.mode === 'webrtc' ? 'webrtc' : 'ws');
+      break;
+    case 'rtc_offer':
+      handleOffer(msg.sdp); break;
+    case 'rtc_ice':
+      if (pc && msg.candidate) pc.addIceCandidate(
+        new RTCIceCandidate({ candidate: msg.candidate, sdpMid: msg.sdpMid, sdpMLineIndex: msg.sdpMLineIndex })
+      ).catch(() => {});
+      break;
     case 'state':
       setStatus(msg.paused ? 'paused' : 'streaming'); break;
+    case 'file_done':
+      setStatus(`file saved on phone: ${msg.name} (Downloads)`); break;
+    case 'file_error':
+      setStatus('file transfer failed'); break;
+    case 'autoq':
+      // Phone changed quality on its own; reflect it without firing change.
+      $('#quality').value = 'auto';
+      setStatus(`auto quality: ${msg.level}`); break;
+    case 'status':
+      $('#batt').textContent = `🔋 ${msg.battery}%${msg.charging ? ' ⚡' : ''}`; break;
+    case 'applist': {
+      const sel = $('#appList');
+      sel.innerHTML = '<option value="">Apps…</option>';
+      for (const a of msg.apps) {
+        const o = document.createElement('option');
+        o.value = a.pkg; o.textContent = a.name;
+        sel.appendChild(o);
+      }
+      setStatus(`${msg.apps.length} apps`); break;
+    }
   }
+}
+
+// Switch between WebSocket video (canvas) and WebRTC (video element).
+function setMode(mode) {
+  if (mode === 'webrtc') {
+    canvas.style.display = 'none'; video.style.display = 'block'; activeEl = video;
+    teardownDecoder();
+  } else {
+    video.style.display = 'none'; canvas.style.display = 'block'; activeEl = canvas;
+    teardownPc();
+  }
+}
+
+async function handleOffer(sdp) {
+  teardownPc();
+  pc = new RTCPeerConnection({
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+  });
+  pc.ontrack = e => { video.srcObject = e.streams[0]; };
+  pc.onicecandidate = e => {
+    if (e.candidate) send({
+      t: 'rtc_ice', candidate: e.candidate.candidate,
+      sdpMid: e.candidate.sdpMid, sdpMLineIndex: e.candidate.sdpMLineIndex
+    });
+  };
+  pc.onconnectionstatechange = () => setStatus(`webrtc: ${pc.connectionState}`);
+  await pc.setRemoteDescription({ type: 'offer', sdp });
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  send({ t: 'rtc_answer', sdp: answer.sdp });
+}
+
+function teardownPc() {
+  if (pc) { try { pc.close(); } catch (e) {} pc = null; }
+  if (video.srcObject) { video.srcObject = null; }
 }
 
 function setupDecoder() {
@@ -358,6 +471,7 @@ function setupDecoder() {
       }
       ctx.drawImage(frame, 0, 0);
       frame.close();
+      rxFrames++;
     },
     error: e => setStatus('decode error: ' + e.message)
   });
@@ -372,6 +486,7 @@ function teardownDecoder() {
 }
 
 function onVideo(buf) {
+  rxBytes += buf.length;
   const type = buf[0];           // 0 config, 1 keyframe, 2 delta
   const payload = buf.subarray(1);
   if (type === 0) { configBytes = payload; return; }
@@ -399,7 +514,7 @@ function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj))
 
 // Map a canvas pixel position to a 0..1 coordinate on the device.
 function norm(ev) {
-  const r = canvas.getBoundingClientRect();
+  const r = activeEl.getBoundingClientRect();
   return {
     x: Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)),
     y: Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height))
@@ -407,8 +522,8 @@ function norm(ev) {
 }
 
 let down = null, downT = 0;
-canvas.addEventListener('pointerdown', ev => { down = norm(ev); downT = Date.now(); });
-canvas.addEventListener('pointerup', ev => {
+stage.addEventListener('pointerdown', ev => { down = norm(ev); downT = Date.now(); });
+stage.addEventListener('pointerup', ev => {
   if (!down) return;
   const up = norm(ev), dt = Date.now() - downT;
   const dist = Math.hypot(up.x - down.x, up.y - down.y);
@@ -421,6 +536,23 @@ canvas.addEventListener('pointerup', ev => {
 document.querySelectorAll('[data-key]').forEach(b =>
   b.addEventListener('click', () => send({ t: 'key', k: b.dataset.key })));
 
+// Launch an app from the dropdown.
+$('#appList').addEventListener('change', e => {
+  if (e.target.value) { send({ t: 'launch', pkg: e.target.value }); e.target.value = ''; }
+});
+
+// Zoom buttons -> pinch at the center of the screen.
+$('#zoomIn').addEventListener('click', () => send({ t: 'pinch', x: 0.5, y: 0.5, out: true }));
+$('#zoomOut').addEventListener('click', () => send({ t: 'pinch', x: 0.5, y: 0.5, out: false }));
+
+// Mouse wheel over the screen -> short swipe (scroll).
+stage.addEventListener('wheel', e => {
+  e.preventDefault();
+  const p = norm(e);
+  const dy = e.deltaY > 0 ? -0.18 : 0.18; // wheel down scrolls content up
+  send({ t: 'swipe', x1: p.x, y1: p.y, x2: p.x, y2: Math.min(1, Math.max(0, p.y + dy)), ms: 120 });
+}, { passive: false });
+
 $('#textbox').addEventListener('keydown', ev => {
   if (ev.key === 'Enter') { send({ t: 'text', s: ev.target.value }); ev.target.value = ''; }
 });
@@ -428,6 +560,68 @@ $('#textbox').addEventListener('keydown', ev => {
 $('#connect').addEventListener('click', connect);
 $('#pause').addEventListener('click', () => send({ t: 'pause' }));
 $('#resume').addEventListener('click', () => send({ t: 'resume' }));
+$('#quality').addEventListener('change', e => send({ t: 'quality', level: e.target.value }));
+$('#clipBtn').addEventListener('click', () => {
+  send({ t: 'clipboard', s: $('#textbox').value });
+  setStatus('clipboard sent to phone');
+});
+
+// File upload: browser -> phone, chunked, with simple backpressure.
+$('#fileInput').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (!file || !ws || ws.readyState !== 1) return;
+  const CHUNK = 64 * 1024;
+  send({ t: 'file_begin', name: file.name, size: file.size });
+  let sent = 0;
+  for (let off = 0; off < file.size; off += CHUNK) {
+    // Wait if the send buffer is getting full, so we don't blow up memory.
+    while (ws.bufferedAmount > 4 * 1024 * 1024) await new Promise(r => setTimeout(r, 20));
+    const buf = await file.slice(off, off + CHUNK).arrayBuffer();
+    ws.send(buf);
+    sent += buf.byteLength;
+    setStatus(`uploading ${file.name}: ${Math.round(sent / file.size * 100)}%`);
+  }
+  send({ t: 'file_end' });
+  e.target.value = '';
+});
+
+// Drag-and-drop a file onto the screen to upload it.
+["dragover","drop"].forEach(ev => stage.addEventListener(ev, e => e.preventDefault()));
+stage.addEventListener('drop', e => {
+  const f = e.dataTransfer?.files?.[0];
+  if (f) { $('#fileInput').files = e.dataTransfer.files; $('#fileInput').dispatchEvent(new Event('change')); }
+});
+
+// Record the live view to a .webm file.
+let recorder = null, recChunks = [];
+$('#recBtn').addEventListener('click', () => {
+  if (recorder) { recorder.stop(); return; }
+  const stream = canvas.captureStream(30);
+  recChunks = [];
+  recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+  recorder.ondataavailable = e => { if (e.data.size) recChunks.push(e.data); };
+  recorder.onstop = () => {
+    const blob = new Blob(recChunks, { type: 'video/webm' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `remotedroid-${Date.now()}.webm`;
+    a.click();
+    recorder = null; $('#recBtn').textContent = '● Rec'; $('#recBtn').style.color = '';
+  };
+  recorder.start();
+  $('#recBtn').textContent = '■ Stop'; $('#recBtn').style.color = '#ff5c5c';
+});
+
+$('#fsBtn').addEventListener('click', () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.querySelector('main').requestFullscreen?.();
+});
+
+// Keyboard: Escape -> Back (when not typing in a field).
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'Escape') send({ t: 'key', k: 'back' });
+});
 
 function setButtons(on) {
   $('#pause').disabled = !on;
