@@ -70,6 +70,9 @@ class RelayClient(
 
     val isControllerAuthenticated: Boolean get() = authed
 
+    /** Bytes still buffered for sending — our signal that the network is behind. */
+    fun queuedBytes(): Long = ws?.queueSize() ?: 0L
+
     override fun onOpen(webSocket: WebSocket, response: Response) {
         Log.i(TAG, "relay connected")
         // Announce ourselves as the device side of the room.

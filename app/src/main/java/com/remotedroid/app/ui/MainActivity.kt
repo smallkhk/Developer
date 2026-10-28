@@ -11,6 +11,7 @@ import android.provider.Settings
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.remotedroid.app.R
 import com.remotedroid.app.capture.CaptureService
 import com.remotedroid.app.databinding.ActivityMainBinding
 import com.remotedroid.app.input.RemoteInputService
@@ -54,8 +55,14 @@ class MainActivity : AppCompatActivity() {
         projectionManager =
             getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
-        binding.relayUrl.setText(prefs.getString("relay", ""))
-        binding.token.setText(prefs.getString("token", ""))
+        // Prefill from saved values, falling back to the baked-in defaults
+        // (config.xml) so you don't have to type your relay each install.
+        binding.relayUrl.setText(
+            prefs.getString("relay", null) ?: getString(R.string.default_relay_url)
+        )
+        binding.token.setText(
+            prefs.getString("token", null) ?: getString(R.string.default_token)
+        )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)

@@ -53,6 +53,7 @@
     <button id="pause" class="ghost" disabled>Pause</button>
     <button id="resume" class="ghost" disabled>Resume</button>
     <span id="status">idle</span>
+    <span id="stats" style="font-size:12px;color:#5b8bf0"></span>
   </header>
 
   <main><canvas id="screen" width="2" height="2"></canvas></main>
@@ -83,6 +84,16 @@ if (!url.value && location.protocol === 'https:')
 
 let ws = null, decoder = null, configBytes = null;
 let deviceW = 0, deviceH = 0, haveKey = false;
+let rxBytes = 0, rxFrames = 0;
+
+// Once a second, show throughput + fps so slowdowns are visible.
+setInterval(() => {
+  const statsEl = $('#stats');
+  if (!ws || ws.readyState !== 1) { statsEl.textContent = ''; return; }
+  const kbps = Math.round(rxBytes * 8 / 1000);
+  statsEl.textContent = `${rxFrames} fps · ${kbps} kbps`;
+  rxBytes = 0; rxFrames = 0;
+}, 1000);
 
 function setStatus(t) { statusEl.textContent = t; }
 
@@ -136,6 +147,7 @@ function setupDecoder() {
       }
       ctx.drawImage(frame, 0, 0);
       frame.close();
+      rxFrames++;
     },
     error: e => setStatus('decode error: ' + e.message)
   });
@@ -150,6 +162,7 @@ function teardownDecoder() {
 }
 
 function onVideo(buf) {
+  rxBytes += buf.length;
   const type = buf[0];           // 0 config, 1 keyframe, 2 delta
   const payload = buf.subarray(1);
   if (type === 0) { configBytes = payload; return; }

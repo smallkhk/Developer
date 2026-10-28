@@ -41,9 +41,15 @@ class CaptureService : Service(), RelayClient.Events {
     private var screenW = 0
     private var screenH = 0
     private var screenDpi = 0
+    // Encoder resolution — scaled down from the real screen to save bandwidth.
+    private var encodeW = 0
+    private var encodeH = 0
 
     @Volatile private var paused = false
     private var cachedConfig: ByteArray? = null
+    // Frame-drop gate: when the send buffer backs up we stop sending delta
+    // frames and jump to the next keyframe, so lag can't pile up.
+    @Volatile private var droppingUntilKeyframe = false
     private val main = Handler(Looper.getMainLooper())
 
     private val projectionCallback = object : MediaProjection.Callback() {
@@ -138,18 +144,44 @@ class CaptureService : Service(), RelayClient.Events {
         if (encoder != null || paused) return
         val proj = projection ?: return
         cachedConfig = null
+        droppingUntilKeyframe = false
         encoder = ScreenEncoder(
-            proj, screenW, screenH, screenDpi,
-            bitrate = 6_000_000, fps = 30
+            proj, encodeW, encodeH, screenDpi,
+            bitrate = BITRATE, fps = FPS
         ) { data, isConfig, isKey ->
             // Prefix: 0 = config (SPS/PPS), 1 = keyframe, 2 = delta frame.
-            val header = if (isConfig) 0 else if (isKey) 1 else 2
-            if (isConfig) cachedConfig = data
-            val out = ByteArray(data.size + 1)
-            out[0] = header.toByte()
-            System.arraycopy(data, 0, out, 1, data.size)
-            relay?.sendVideo(out)
+            if (isConfig) {
+                cachedConfig = data
+                sendFramed(0, data)
+                return@ScreenEncoder
+            }
+
+            val backedUp = (relay?.queuedBytes() ?: 0L) > MAX_QUEUE_BYTES
+            if (isKey) {
+                // A keyframe is a clean restart point — always send it and
+                // clear any drop state.
+                droppingUntilKeyframe = false
+                sendFramed(1, data)
+            } else if (droppingUntilKeyframe) {
+                // Waiting for the next keyframe; skip stale deltas.
+                return@ScreenEncoder
+            } else if (backedUp) {
+                // Network is behind: drop this delta and ask for a fresh
+                // keyframe so the browser jumps straight to the latest screen.
+                droppingUntilKeyframe = true
+                encoder?.requestKeyFrame()
+            } else {
+                sendFramed(2, data)
+            }
         }.also { it.start() }
+    }
+
+    /** Send one video unit with a 1-byte type header (0 config, 1 key, 2 delta). */
+    private fun sendFramed(type: Int, data: ByteArray) {
+        val out = ByteArray(data.size + 1)
+        out[0] = type.toByte()
+        System.arraycopy(data, 0, out, 1, data.size)
+        relay?.sendVideo(out)
     }
 
     private fun pauseCapture() {
@@ -224,6 +256,14 @@ class CaptureService : Service(), RelayClient.Events {
         // H.264 encoders want even dimensions.
         screenW -= screenW % 2
         screenH -= screenH % 2
+
+        // Scale down for streaming: cap the shorter side to MAX_SHORT_SIDE,
+        // keeping aspect ratio. Input stays mapped via normalized 0..1 coords,
+        // so this doesn't affect tap accuracy.
+        val shortSide = minOf(screenW, screenH)
+        val scale = if (shortSide > MAX_SHORT_SIDE) MAX_SHORT_SIDE.toFloat() / shortSide else 1f
+        encodeW = ((screenW * scale).toInt()).let { it - it % 2 }
+        encodeH = ((screenH * scale).toInt()).let { it - it % 2 }
     }
 
     private fun buildNotification(text: String): Notification {
@@ -262,6 +302,13 @@ class CaptureService : Service(), RelayClient.Events {
         private const val TAG = "CaptureService"
         private const val CHANNEL = "remote_session"
         private const val NOTIF_ID = 42
+
+        // Streaming tuning. Lower MAX_SHORT_SIDE/BITRATE for slower links.
+        private const val MAX_SHORT_SIDE = 720
+        private const val BITRATE = 2_500_000
+        private const val FPS = 30
+        // Drop frames once this many bytes are waiting to be sent.
+        private const val MAX_QUEUE_BYTES = 512_000L
 
         const val ACTION_STOP = "com.remotedroid.app.STOP"
         const val EXTRA_RESULT_CODE = "result_code"

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Personal defaults pre-filled into the app's setup screen.
+     Kept EMPTY in the repo on purpose: this repository is public, so do NOT
+     commit your real relay URL/secret here. Fill these locally only when you
+     build your own APK; the values compile into that APK. -->
+<resources>
+    <string name="default_relay_url"></string>
+    <string name="default_token"></string>
+</resources>
