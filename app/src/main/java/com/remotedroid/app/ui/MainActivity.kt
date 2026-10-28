@@ -35,7 +35,8 @@ class MainActivity : AppCompatActivity() {
             CaptureService.start(
                 this, result.resultCode, data,
                 binding.relayUrl.text.toString().trim(),
-                binding.token.text.toString()
+                binding.token.text.toString(),
+                binding.fastMode.isChecked
             )
             setRunning(true)
             binding.status.text = "Session running. You can leave this screen."

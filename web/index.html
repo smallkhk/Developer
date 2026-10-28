@@ -33,9 +33,11 @@
     flex: 1; display: flex; align-items: center; justify-content: center;
     overflow: hidden; padding: 10px;
   }
-  #screen {
+  #stage { max-width: 100%; max-height: 100%; }
+  #screen, #rtcVideo {
     max-width: 100%; max-height: 100%; background: #000; border-radius: 10px;
     touch-action: none; cursor: crosshair; box-shadow: 0 8px 40px rgba(0,0,0,.5);
+    display: block;
   }
   footer {
     display: flex; gap: 8px; padding: 10px 14px; background: #161b22;
@@ -64,7 +66,12 @@
     <span id="batt" style="font-size:12px;color:#9aa4b2"></span>
   </header>
 
-  <main><canvas id="screen" width="2" height="2"></canvas></main>
+  <main>
+    <div id="stage">
+      <canvas id="screen" width="2" height="2"></canvas>
+      <video id="rtcVideo" autoplay playsinline muted style="display:none"></video>
+    </div>
+  </main>
 
   <footer>
     <div class="keys">
@@ -99,6 +106,9 @@
 const $ = s => document.querySelector(s);
 const url = $('#url'), token = $('#token'), statusEl = $('#status');
 const canvas = $('#screen'), ctx = canvas.getContext('2d');
+const video = $('#rtcVideo'), stage = $('#stage');
+let activeEl = canvas;        // the element currently showing the phone
+let pc = null;                // RTCPeerConnection in Fast (WebRTC) mode
 
 // Remember last-used relay + token locally (per-browser convenience only).
 try {
@@ -145,7 +155,7 @@ function connect() {
     onVideo(new Uint8Array(ev.data));
   };
 
-  ws.onclose = () => { setStatus('disconnected'); teardownDecoder(); setButtons(false); };
+  ws.onclose = () => { setStatus('disconnected'); teardownDecoder(); teardownPc(); setButtons(false); };
   ws.onerror = () => setStatus('connection error');
 }
 
@@ -159,7 +169,16 @@ function onControl(msg) {
     case 'auth_fail':
       setStatus('wrong token'); ws.close(); break;
     case 'meta':
-      deviceW = msg.w; deviceH = msg.h; break;
+      deviceW = msg.w; deviceH = msg.h;
+      setMode(msg.mode === 'webrtc' ? 'webrtc' : 'ws');
+      break;
+    case 'rtc_offer':
+      handleOffer(msg.sdp); break;
+    case 'rtc_ice':
+      if (pc && msg.candidate) pc.addIceCandidate(
+        new RTCIceCandidate({ candidate: msg.candidate, sdpMid: msg.sdpMid, sdpMLineIndex: msg.sdpMLineIndex })
+      ).catch(() => {});
+      break;
     case 'state':
       setStatus(msg.paused ? 'paused' : 'streaming'); break;
     case 'file_done':
@@ -183,6 +202,41 @@ function onControl(msg) {
       setStatus(`${msg.apps.length} apps`); break;
     }
   }
+}
+
+// Switch between WebSocket video (canvas) and WebRTC (video element).
+function setMode(mode) {
+  if (mode === 'webrtc') {
+    canvas.style.display = 'none'; video.style.display = 'block'; activeEl = video;
+    teardownDecoder();
+  } else {
+    video.style.display = 'none'; canvas.style.display = 'block'; activeEl = canvas;
+    teardownPc();
+  }
+}
+
+async function handleOffer(sdp) {
+  teardownPc();
+  pc = new RTCPeerConnection({
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+  });
+  pc.ontrack = e => { video.srcObject = e.streams[0]; };
+  pc.onicecandidate = e => {
+    if (e.candidate) send({
+      t: 'rtc_ice', candidate: e.candidate.candidate,
+      sdpMid: e.candidate.sdpMid, sdpMLineIndex: e.candidate.sdpMLineIndex
+    });
+  };
+  pc.onconnectionstatechange = () => setStatus(`webrtc: ${pc.connectionState}`);
+  await pc.setRemoteDescription({ type: 'offer', sdp });
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  send({ t: 'rtc_answer', sdp: answer.sdp });
+}
+
+function teardownPc() {
+  if (pc) { try { pc.close(); } catch (e) {} pc = null; }
+  if (video.srcObject) { video.srcObject = null; }
 }
 
 function setupDecoder() {
@@ -238,7 +292,7 @@ function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj))
 
 // Map a canvas pixel position to a 0..1 coordinate on the device.
 function norm(ev) {
-  const r = canvas.getBoundingClientRect();
+  const r = activeEl.getBoundingClientRect();
   return {
     x: Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)),
     y: Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height))
@@ -246,8 +300,8 @@ function norm(ev) {
 }
 
 let down = null, downT = 0;
-canvas.addEventListener('pointerdown', ev => { down = norm(ev); downT = Date.now(); });
-canvas.addEventListener('pointerup', ev => {
+stage.addEventListener('pointerdown', ev => { down = norm(ev); downT = Date.now(); });
+stage.addEventListener('pointerup', ev => {
   if (!down) return;
   const up = norm(ev), dt = Date.now() - downT;
   const dist = Math.hypot(up.x - down.x, up.y - down.y);
@@ -270,7 +324,7 @@ $('#zoomIn').addEventListener('click', () => send({ t: 'pinch', x: 0.5, y: 0.5, 
 $('#zoomOut').addEventListener('click', () => send({ t: 'pinch', x: 0.5, y: 0.5, out: false }));
 
 // Mouse wheel over the screen -> short swipe (scroll).
-canvas.addEventListener('wheel', e => {
+stage.addEventListener('wheel', e => {
   e.preventDefault();
   const p = norm(e);
   const dy = e.deltaY > 0 ? -0.18 : 0.18; // wheel down scrolls content up
@@ -310,8 +364,8 @@ $('#fileInput').addEventListener('change', async e => {
 });
 
 // Drag-and-drop a file onto the screen to upload it.
-['dragover', 'drop'].forEach(ev => canvas.addEventListener(ev, e => e.preventDefault()));
-canvas.addEventListener('drop', e => {
+["dragover","drop"].forEach(ev => stage.addEventListener(ev, e => e.preventDefault()));
+stage.addEventListener('drop', e => {
   const f = e.dataTransfer?.files?.[0];
   if (f) { $('#fileInput').files = e.dataTransfer.files; $('#fileInput').dispatchEvent(new Event('change')); }
 });

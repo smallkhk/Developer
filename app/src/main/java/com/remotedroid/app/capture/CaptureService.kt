@@ -71,6 +71,13 @@ class CaptureService : Service(), RelayClient.Events {
 
     private var wakeLock: android.os.PowerManager.WakeLock? = null
 
+    // Fast (WebRTC) mode: when on, we stream over a direct peer connection
+    // instead of the WebSocket-video path.
+    private var webrtcMode = false
+    private var resultCode = 0
+    private var resultData: Intent? = null
+    private var webRtc: WebRtcClient? = null
+
     private val fileReceiver by lazy { FileReceiver(this) }
     private val main = Handler(Looper.getMainLooper())
 
@@ -108,13 +115,16 @@ class CaptureService : Service(), RelayClient.Events {
             startForeground(NOTIF_ID, buildNotification("Connecting…"))
         }
 
-        val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
-        val data = intent?.getParcelableExtra<Intent>(EXTRA_RESULT_DATA)
+        resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
+        resultData = intent?.getParcelableExtra(EXTRA_RESULT_DATA)
+        webrtcMode = intent?.getBooleanExtra(EXTRA_WEBRTC, false) ?: false
         val relayUrl = intent?.getStringExtra(EXTRA_RELAY_URL).orEmpty()
         val token = intent?.getStringExtra(EXTRA_TOKEN).orEmpty()
 
-        if (resultCode != 0 && data != null && projection == null) {
-            projection = projectionManager.getMediaProjection(resultCode, data).also {
+        // WebSocket mode creates our own MediaProjection now. WebRTC mode lets
+        // the WebRTC screen capturer create it later from the same result.
+        if (!webrtcMode && resultCode != 0 && resultData != null && projection == null) {
+            projection = projectionManager.getMediaProjection(resultCode, resultData!!).also {
                 it.registerCallback(projectionCallback, main)
             }
         }
@@ -133,13 +143,26 @@ class CaptureService : Service(), RelayClient.Events {
     override fun onControllerAuthenticated() {
         main.post {
             updateNotification("Connected — streaming")
-            startEncoderIfNeeded()
-            // Tell the browser the real pixel size so it can map clicks.
+            if (webrtcMode) startWebRtc() else startEncoderIfNeeded()
+            // Tell the browser the real pixel size so it can map clicks, and
+            // which mode we're in.
             relay?.sendJson(
                 JSONObject().put("t", "meta").put("w", screenW).put("h", screenH)
+                    .put("mode", if (webrtcMode) "webrtc" else "ws")
             )
             sendState()
         }
+    }
+
+    private fun startWebRtc() {
+        val data = resultData ?: return
+        if (webRtc != null) return
+        computeEncodeDims(curMaxShort)
+        webRtc = WebRtcClient(
+            this, data, encodeW, encodeH, curFps,
+            signal = { relay?.sendJson(it) },
+            onProjectionStopped = { main.post { stopEverything(); stopSelf() } }
+        ).also { it.start() }
     }
 
     override fun onControlMessage(msg: JSONObject) {
@@ -161,6 +184,11 @@ class CaptureService : Service(), RelayClient.Events {
             "pinch" -> input()?.pinch(px(msg, "x"), py(msg, "y"), msg.optBoolean("out", true))
             "applist" -> sendAppList()
             "launch" -> launchApp(msg.optString("pkg"))
+            "rtc_answer" -> webRtc?.onAnswer(msg.optString("sdp"))
+            "rtc_ice" -> webRtc?.onRemoteIce(
+                msg.optString("sdpMid", null), msg.optInt("sdpMLineIndex", 0),
+                msg.optString("candidate")
+            )
             "file_begin" -> {
                 val ok = fileReceiver.begin(msg.optString("name"), msg.optLong("size", 0))
                 if (!ok) relay?.sendJson(JSONObject().put("t", "file_error"))
@@ -387,6 +415,8 @@ class CaptureService : Service(), RelayClient.Events {
         try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Exception) {}
         wakeLock = null
         try { fileReceiver.abort() } catch (_: Exception) {}
+        try { webRtc?.stop() } catch (_: Exception) {}
+        webRtc = null
         try { encoder?.stop() } catch (_: Exception) {}
         encoder = null
         try { relay?.close() } catch (_: Exception) {}
@@ -498,13 +528,18 @@ class CaptureService : Service(), RelayClient.Events {
         const val EXTRA_RESULT_DATA = "result_data"
         const val EXTRA_RELAY_URL = "relay_url"
         const val EXTRA_TOKEN = "token"
+        const val EXTRA_WEBRTC = "webrtc"
 
-        fun start(ctx: Context, resultCode: Int, data: Intent, relayUrl: String, token: String) {
+        fun start(
+            ctx: Context, resultCode: Int, data: Intent,
+            relayUrl: String, token: String, webrtc: Boolean
+        ) {
             val i = Intent(ctx, CaptureService::class.java)
                 .putExtra(EXTRA_RESULT_CODE, resultCode)
                 .putExtra(EXTRA_RESULT_DATA, data)
                 .putExtra(EXTRA_RELAY_URL, relayUrl)
                 .putExtra(EXTRA_TOKEN, token)
+                .putExtra(EXTRA_WEBRTC, webrtc)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 ctx.startForegroundService(i)
             } else {
