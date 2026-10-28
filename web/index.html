@@ -77,6 +77,9 @@ try {
   url.value = localStorage.getItem('rd_url') || '';
   token.value = localStorage.getItem('rd_token') || '';
 } catch (e) {}
+// When served by the relay itself, default to this same host.
+if (!url.value && location.protocol === 'https:')
+  url.value = `wss://${location.host}/my-phone`;
 
 let ws = null, decoder = null, configBytes = null;
 let deviceW = 0, deviceH = 0, haveKey = false;

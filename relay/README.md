@@ -4,6 +4,25 @@ A tiny WebSocket relay for your VPS. The phone and the browser both connect to
 the same room (the URL path) and the relay forwards everything between them. It
 never sees your app token — it just moves bytes.
 
+## One-command install (recommended)
+
+Copy `install.sh` to your Ubuntu/Debian VPS and run it as root:
+
+```bash
+scp relay/install.sh root@YOUR_IP:
+ssh root@YOUR_IP 'bash install.sh'
+```
+
+It does everything below automatically (Node, nginx, a free HTTPS cert for
+`YOUR_IP.nip.io`, systemd, firewall, a generated relay secret) and prints the
+exact URLs to use at the end. It also hosts the browser controller at
+`https://YOUR_IP.nip.io/`. Re-running it updates the code and keeps your secret.
+
+`install.sh` is generated: edit `server.js`, `install.template.sh` or
+`web/index.html`, then run `bash relay/build-install.sh`.
+
+The sections below are the same steps done by hand.
+
 ## Why you need TLS (wss://)
 
 The Android app sends over `wss://` and browsers block `ws://` from an HTTPS

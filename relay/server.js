@@ -22,6 +22,8 @@
  *   MAX_MSG_BYTES   max single message size (default 8 MiB)
  */
 
+const fs = require('fs');
+const path = require('path');
 const http = require('http');
 const { URL } = require('url');
 const { WebSocketServer } = require('ws');
@@ -31,6 +33,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const RELAY_SECRET = process.env.RELAY_SECRET || '';
 const MAX_ROOMS = parseInt(process.env.MAX_ROOMS || '50', 10);
 const MAX_MSG_BYTES = parseInt(process.env.MAX_MSG_BYTES || String(8 * 1024 * 1024), 10);
+const CONTROLLER_HTML = process.env.CONTROLLER_HTML || path.join(__dirname, 'public', 'index.html');
 
 // roomName -> Set<ws>
 const rooms = new Map();
@@ -40,6 +43,15 @@ const server = http.createServer((req, res) => {
   if (req.url === '/healthz') {
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end(`ok rooms=${rooms.size}\n`);
+    return;
+  }
+  // Serve the browser controller at "/" so you can open https://<host>/ directly.
+  if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
+    fs.readFile(CONTROLLER_HTML, (err, html) => {
+      if (err) { res.writeHead(404); res.end('controller page not installed\n'); return; }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(html);
+    });
     return;
   }
   res.writeHead(426, { 'content-type': 'text/plain' });
