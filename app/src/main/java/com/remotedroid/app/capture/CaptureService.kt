@@ -50,6 +50,13 @@ class CaptureService : Service(), RelayClient.Events {
     // Frame-drop gate: when the send buffer backs up we stop sending delta
     // frames and jump to the next keyframe, so lag can't pile up.
     @Volatile private var droppingUntilKeyframe = false
+
+    // Current streaming quality (changeable live from the browser).
+    private var curMaxShort = DEFAULT_MAX_SHORT_SIDE
+    private var curBitrate = DEFAULT_BITRATE
+    private var curFps = DEFAULT_FPS
+
+    private val fileReceiver by lazy { FileReceiver(this) }
     private val main = Handler(Looper.getMainLooper())
 
     private val projectionCallback = object : MediaProjection.Callback() {
@@ -132,7 +139,50 @@ class CaptureService : Service(), RelayClient.Events {
             "resume" -> main.post { resumeCapture() }
             "keyframe" -> encoder?.requestKeyFrame()
             "state" -> sendState()
+            "quality" -> main.post { setQuality(msg.optString("level", "medium")) }
+            "clipboard" -> main.post { setClipboard(msg.optString("s")) }
+            "file_begin" -> {
+                val ok = fileReceiver.begin(msg.optString("name"), msg.optLong("size", 0))
+                if (!ok) relay?.sendJson(JSONObject().put("t", "file_error"))
+            }
+            "file_end" -> {
+                val name = fileReceiver.end()
+                relay?.sendJson(
+                    JSONObject().put("t", if (name != null) "file_done" else "file_error")
+                        .put("name", name ?: "")
+                )
+            }
+            "file_abort" -> fileReceiver.abort()
         }
+    }
+
+    override fun onBinary(data: ByteArray) {
+        // Inbound binary is file-upload data for the active transfer.
+        fileReceiver.chunk(data)
+    }
+
+    /** Apply a quality preset and restart the encoder (keeps the projection). */
+    private fun setQuality(level: String) {
+        when (level) {
+            "low" -> { curMaxShort = 480; curBitrate = 1_000_000; curFps = 20 }
+            "high" -> { curMaxShort = 1080; curBitrate = 5_000_000; curFps = 30 }
+            else -> { curMaxShort = 720; curBitrate = 2_500_000; curFps = 30 }
+        }
+        if (!paused && encoder != null) {
+            encoder?.stop()
+            encoder = null
+            startEncoderIfNeeded()
+            encoder?.requestKeyFrame()
+        }
+    }
+
+    /** Best-effort: put text on the phone's clipboard. */
+    private fun setClipboard(text: String) {
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE)
+                    as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("RemoteDroid", text))
+        } catch (e: Exception) { Log.w(TAG, "clipboard set failed", e) }
     }
 
     override fun onClosed(reason: String) = updateNotification("Disconnected")
@@ -145,9 +195,10 @@ class CaptureService : Service(), RelayClient.Events {
         val proj = projection ?: return
         cachedConfig = null
         droppingUntilKeyframe = false
+        computeEncodeDims(curMaxShort)
         encoder = ScreenEncoder(
             proj, encodeW, encodeH, screenDpi,
-            bitrate = BITRATE, fps = FPS
+            bitrate = curBitrate, fps = curFps
         ) { data, isConfig, isKey ->
             // Prefix: 0 = config (SPS/PPS), 1 = keyframe, 2 = delta frame.
             if (isConfig) {
@@ -211,6 +262,7 @@ class CaptureService : Service(), RelayClient.Events {
     }
 
     private fun stopEverything() {
+        try { fileReceiver.abort() } catch (_: Exception) {}
         try { encoder?.stop() } catch (_: Exception) {}
         encoder = null
         try { relay?.close() } catch (_: Exception) {}
@@ -257,13 +309,17 @@ class CaptureService : Service(), RelayClient.Events {
         screenW -= screenW % 2
         screenH -= screenH % 2
 
-        // Scale down for streaming: cap the shorter side to MAX_SHORT_SIDE,
-        // keeping aspect ratio. Input stays mapped via normalized 0..1 coords,
-        // so this doesn't affect tap accuracy.
-        val shortSide = minOf(screenW, screenH)
-        val scale = if (shortSide > MAX_SHORT_SIDE) MAX_SHORT_SIDE.toFloat() / shortSide else 1f
-        encodeW = ((screenW * scale).toInt()).let { it - it % 2 }
-        encodeH = ((screenH * scale).toInt()).let { it - it % 2 }
+        computeEncodeDims(curMaxShort)
+    }
+
+    /** Scale the capture so the shorter side is at most [maxShort], keeping
+     *  aspect ratio. Input stays mapped via normalized 0..1 coords, so this
+     *  never affects tap accuracy. */
+    private fun computeEncodeDims(maxShort: Int) {
+        val shortSide = minOf(screenW, screenH).coerceAtLeast(1)
+        val scale = if (shortSide > maxShort) maxShort.toFloat() / shortSide else 1f
+        encodeW = ((screenW * scale).toInt()).let { it - it % 2 }.coerceAtLeast(2)
+        encodeH = ((screenH * scale).toInt()).let { it - it % 2 }.coerceAtLeast(2)
     }
 
     private fun buildNotification(text: String): Notification {
@@ -303,10 +359,10 @@ class CaptureService : Service(), RelayClient.Events {
         private const val CHANNEL = "remote_session"
         private const val NOTIF_ID = 42
 
-        // Streaming tuning. Lower MAX_SHORT_SIDE/BITRATE for slower links.
-        private const val MAX_SHORT_SIDE = 720
-        private const val BITRATE = 2_500_000
-        private const val FPS = 30
+        // Default streaming tuning (changeable live via the quality control).
+        private const val DEFAULT_MAX_SHORT_SIDE = 720
+        private const val DEFAULT_BITRATE = 2_500_000
+        private const val DEFAULT_FPS = 30
         // Drop frames once this many bytes are waiting to be sent.
         private const val MAX_QUEUE_BYTES = 512_000L
 

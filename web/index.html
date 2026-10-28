@@ -66,6 +66,15 @@
       <button class="ghost" data-key="notifications">▾ Notif</button>
     </div>
     <input id="textbox" placeholder="type text, press Enter to send to focused field" />
+    <select id="quality" class="ghost" title="stream quality">
+      <option value="low">Low</option>
+      <option value="medium" selected>Medium</option>
+      <option value="high">High</option>
+    </select>
+    <button id="clipBtn" class="ghost" title="send the text box to the phone's clipboard">Clipboard</button>
+    <label class="ghost" style="padding:7px 13px;border-radius:7px;cursor:pointer;">
+      Send file<input id="fileInput" type="file" style="display:none" />
+    </label>
   </footer>
 
 <script type="module">
@@ -134,6 +143,10 @@ function onControl(msg) {
       deviceW = msg.w; deviceH = msg.h; break;
     case 'state':
       setStatus(msg.paused ? 'paused' : 'streaming'); break;
+    case 'file_done':
+      setStatus(`file saved on phone: ${msg.name} (Downloads)`); break;
+    case 'file_error':
+      setStatus('file transfer failed'); break;
   }
 }
 
@@ -219,6 +232,30 @@ $('#textbox').addEventListener('keydown', ev => {
 $('#connect').addEventListener('click', connect);
 $('#pause').addEventListener('click', () => send({ t: 'pause' }));
 $('#resume').addEventListener('click', () => send({ t: 'resume' }));
+$('#quality').addEventListener('change', e => send({ t: 'quality', level: e.target.value }));
+$('#clipBtn').addEventListener('click', () => {
+  send({ t: 'clipboard', s: $('#textbox').value });
+  setStatus('clipboard sent to phone');
+});
+
+// File upload: browser -> phone, chunked, with simple backpressure.
+$('#fileInput').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (!file || !ws || ws.readyState !== 1) return;
+  const CHUNK = 64 * 1024;
+  send({ t: 'file_begin', name: file.name, size: file.size });
+  let sent = 0;
+  for (let off = 0; off < file.size; off += CHUNK) {
+    // Wait if the send buffer is getting full, so we don't blow up memory.
+    while (ws.bufferedAmount > 4 * 1024 * 1024) await new Promise(r => setTimeout(r, 20));
+    const buf = await file.slice(off, off + CHUNK).arrayBuffer();
+    ws.send(buf);
+    sent += buf.byteLength;
+    setStatus(`uploading ${file.name}: ${Math.round(sent / file.size * 100)}%`);
+  }
+  send({ t: 'file_end' });
+  e.target.value = '';
+});
 
 function setButtons(on) {
   $('#pause').disabled = !on;

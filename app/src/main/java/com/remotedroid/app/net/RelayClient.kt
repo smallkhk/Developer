@@ -1,5 +1,7 @@
 package com.remotedroid.app.net
 
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -12,15 +14,13 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
- * Talks to your relay over a WebSocket.
+ * Talks to your relay over a WebSocket, and reconnects by itself if the link
+ * drops (Wi-Fi change, relay restart, phone sleep). Both this device and your
+ * browser connect to the same room; the relay forwards between them.
  *
- * The protocol is deliberately simple so almost any forwarding relay works:
- * this device and your browser both connect to the same URL (a "room"); the
- * relay just forwards messages between the two. Text frames carry JSON control
- * messages; binary frames carry the H.264 video the browser decodes.
- *
- * Auth is peer-to-peer: the relay never sees your token. The browser must send
- * the correct token before this device will stream or accept any input.
+ * Text frames carry JSON control; binary frames carry H.264 video (device ->
+ * browser) and file chunks (browser -> device). Auth is peer-to-peer: the relay
+ * never sees your token.
  */
 class RelayClient(
     private val url: String,
@@ -29,10 +29,10 @@ class RelayClient(
 ) : WebSocketListener() {
 
     interface Events {
-        /** A controller (browser) authenticated successfully. */
         fun onControllerAuthenticated()
-        /** A JSON control message arrived from the controller. */
         fun onControlMessage(msg: JSONObject)
+        /** Binary payload from the controller (file upload chunks). */
+        fun onBinary(data: ByteArray)
         fun onOpen()
         fun onClosed(reason: String)
         fun onFailure(t: Throwable)
@@ -43,39 +43,51 @@ class RelayClient(
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
+    private val reconnect = Handler(Looper.getMainLooper())
     @Volatile private var ws: WebSocket? = null
     @Volatile private var authed = false
+    @Volatile private var shouldRun = false
+    private var backoffMs = 1_000L
 
     fun connect() {
-        val req = Request.Builder().url(url).build()
-        ws = client.newWebSocket(req, this)
+        shouldRun = true
+        open()
+    }
+
+    private fun open() {
+        if (!shouldRun) return
+        authed = false
+        ws = client.newWebSocket(Request.Builder().url(url).build(), this)
     }
 
     fun close() {
+        shouldRun = false
+        reconnect.removeCallbacksAndMessages(null)
         authed = false
-        ws?.close(1000, "bye")
+        try { ws?.close(1000, "bye") } catch (_: Exception) {}
         ws = null
     }
 
-    /** Send a JSON control message to the controller. */
-    fun sendJson(obj: JSONObject) {
-        ws?.send(obj.toString())
+    private fun scheduleReconnect() {
+        if (!shouldRun) return
+        listener.onClosed("reconnecting")
+        reconnect.postDelayed({ open() }, backoffMs)
+        backoffMs = (backoffMs * 2).coerceAtMost(15_000L)
     }
 
-    /** Send a binary video frame to the controller (only once authenticated). */
+    fun sendJson(obj: JSONObject) { ws?.send(obj.toString()) }
+
     fun sendVideo(data: ByteArray) {
         if (!authed) return
         ws?.send(data.toByteString(0, data.size))
     }
 
     val isControllerAuthenticated: Boolean get() = authed
-
-    /** Bytes still buffered for sending — our signal that the network is behind. */
     fun queuedBytes(): Long = ws?.queueSize() ?: 0L
 
     override fun onOpen(webSocket: WebSocket, response: Response) {
         Log.i(TAG, "relay connected")
-        // Announce ourselves as the device side of the room.
+        backoffMs = 1_000L
         sendJson(JSONObject().put("t", "hello").put("role", "device"))
         listener.onOpen()
     }
@@ -92,15 +104,12 @@ class RelayClient(
                     sendJson(JSONObject().put("t", "auth_fail"))
                 }
             }
-            else -> {
-                // All other control messages require an authenticated controller.
-                if (authed) listener.onControlMessage(msg)
-            }
+            else -> if (authed) listener.onControlMessage(msg)
         }
     }
 
     override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-        // Device side does not expect binary input in v1.
+        if (authed) listener.onBinary(bytes.toByteArray())
     }
 
     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -110,13 +119,14 @@ class RelayClient(
 
     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
         authed = false
-        listener.onClosed(reason)
+        scheduleReconnect()
     }
 
     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
         authed = false
-        Log.w(TAG, "relay failure", t)
+        Log.w(TAG, "relay failure: ${t.message}")
         listener.onFailure(t)
+        scheduleReconnect()
     }
 
     companion object { private const val TAG = "RelayClient" }
