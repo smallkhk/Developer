@@ -143,7 +143,11 @@ class CaptureService : Service(), RelayClient.Events {
     override fun onControllerAuthenticated() {
         main.post {
             updateNotification("Connected — streaming")
-            if (webrtcMode) startWebRtc() else startEncoderIfNeeded()
+            if (webrtcMode) {
+                // New or reconnected browser: start, or re-offer over the
+                // existing capture so we don't re-consume the projection.
+                if (webRtc == null) startWebRtc() else webRtc?.restartIce()
+            } else startEncoderIfNeeded()
             // Tell the browser the real pixel size so it can map clicks, and
             // which mode we're in.
             relay?.sendJson(
@@ -184,6 +188,7 @@ class CaptureService : Service(), RelayClient.Events {
             "pinch" -> input()?.pinch(px(msg, "x"), py(msg, "y"), msg.optBoolean("out", true))
             "applist" -> sendAppList()
             "launch" -> launchApp(msg.optString("pkg"))
+            "rtc_start" -> main.post { if (webRtc == null) startWebRtc() else webRtc?.restartIce() }
             "rtc_answer" -> webRtc?.onAnswer(msg.optString("sdp"))
             "rtc_ice" -> webRtc?.onRemoteIce(
                 msg.optString("sdpMid", null), msg.optInt("sdpMLineIndex", 0),

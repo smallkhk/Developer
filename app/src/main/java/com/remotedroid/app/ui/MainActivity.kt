@@ -76,6 +76,8 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
 
+        binding.batteryBtn.setOnClickListener { requestIgnoreBattery() }
+
         binding.startBtn.setOnClickListener {
             val url = binding.relayUrl.text.toString().trim()
             if (url.isBlank()) {
@@ -103,6 +105,28 @@ class MainActivity : AppCompatActivity() {
             binding.accessibilityBtn.text = "Enable remote input (Accessibility)"
         } else {
             binding.accessibilityBtn.text = "Remote input enabled ✓"
+        }
+    }
+
+    /** Ask the OS to stop battery-killing the app (esp. important on Samsung,
+     *  Xiaomi, etc. that aggressively sleep background apps). */
+    private fun requestIgnoreBattery() {
+        try {
+            val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+            if (pm.isIgnoringBatteryOptimizations(packageName)) {
+                binding.status.text = "Battery limits already disabled ✓"
+                // Also open the manufacturer sleeping-apps list for good measure.
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            } else {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        android.net.Uri.parse("package:$packageName")
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }
     }
 

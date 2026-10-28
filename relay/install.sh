@@ -331,6 +331,7 @@ const canvas = $('#screen'), ctx = canvas.getContext('2d');
 const video = $('#rtcVideo'), stage = $('#stage');
 let activeEl = canvas;        // the element currently showing the phone
 let pc = null;                // RTCPeerConnection in Fast (WebRTC) mode
+let rtcRetry = null;          // debounce for reconnection requests
 
 // Remember last-used relay + token locally (per-browser convenience only).
 try {
@@ -449,7 +450,14 @@ async function handleOffer(sdp) {
       sdpMid: e.candidate.sdpMid, sdpMLineIndex: e.candidate.sdpMLineIndex
     });
   };
-  pc.onconnectionstatechange = () => setStatus(`webrtc: ${pc.connectionState}`);
+  pc.onconnectionstatechange = () => {
+    setStatus(`webrtc: ${pc.connectionState}`);
+    // If the path drops, ask the phone to renegotiate (it reuses capture).
+    if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+      clearTimeout(rtcRetry);
+      rtcRetry = setTimeout(() => { if (ws && ws.readyState === 1) send({ t: 'rtc_start' }); }, 1500);
+    }
+  };
   await pc.setRemoteDescription({ type: 'offer', sdp });
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);

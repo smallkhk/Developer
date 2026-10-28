@@ -63,6 +63,14 @@
             android:text="Enable remote input (Accessibility)" />
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/batteryBtn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:text="Keep running (disable battery limits)" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/startBtn"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

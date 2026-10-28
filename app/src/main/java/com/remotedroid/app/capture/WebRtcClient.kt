@@ -77,14 +77,31 @@ class WebRtcClient(
         createOffer()
     }
 
-    private fun createOffer() {
-        val constraints = MediaConstraints()
+    @Volatile private var restarting = false
+
+    private fun createOffer(iceRestart: Boolean = false) {
+        val constraints = MediaConstraints().apply {
+            if (iceRestart) mandatory.add(
+                MediaConstraints.KeyValuePair("IceRestart", "true")
+            )
+        }
         pc?.createOffer(object : SdpObserverAdapter() {
             override fun onCreateSuccess(sdp: SessionDescription) {
                 pc?.setLocalDescription(SdpObserverAdapter(), sdp)
                 signal(JSONObject().put("t", "rtc_offer").put("sdp", sdp.description))
+                restarting = false
             }
+            override fun onCreateFailure(error: String?) { restarting = false }
         }, constraints)
+    }
+
+    /** Re-negotiate connectivity without rebuilding capture (reuses the same
+     *  MediaProjection, so no re-prompt). Safe to call on drops or when a new
+     *  browser reconnects. */
+    fun restartIce() {
+        if (pc == null || restarting) return
+        restarting = true
+        createOffer(iceRestart = true)
     }
 
     /** Apply the browser's answer SDP. */
@@ -123,6 +140,8 @@ class WebRtcClient(
         }
         override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
             Log.i(TAG, "pc state: $newState")
+            // Auto-heal: when the path fails, renegotiate instead of dying.
+            if (newState == PeerConnection.PeerConnectionState.FAILED) restartIce()
         }
         override fun onSignalingChange(s: PeerConnection.SignalingState) {}
         override fun onIceConnectionChange(s: PeerConnection.IceConnectionState) {}
