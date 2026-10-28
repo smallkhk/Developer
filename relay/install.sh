@@ -526,7 +526,13 @@ fi
 systemctl reload nginx
 
 sleep 1
-if curl -fsS "https://$HOSTNAME_FQDN/healthz" >/dev/null; then HEALTH=OK; else HEALTH="FAILED (check: journalctl -u remotedroid-relay)"; fi
+if ! curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
+  HEALTH="FAILED — relay not running (check: journalctl -u remotedroid-relay)"
+elif curl -fsS -m 15 "https://$HOSTNAME_FQDN/healthz" >/dev/null; then
+  HEALTH=OK
+else
+  HEALTH="relay OK, but port 443 is unreachable — open TCP 443 in your VPS provider's firewall / security group"
+fi
 
 cat <<DONE
 
