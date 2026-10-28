@@ -43,6 +43,13 @@
   }
   footer .keys { display: flex; gap: 6px; }
   #textbox { flex: 1 1 200px; min-width: 140px; }
+  @media (max-width: 640px) {
+    header, footer { gap: 6px; padding: 8px; }
+    button, header input, #textbox, select { font-size: 15px; padding: 9px 11px; }
+    #url { flex: 1 1 100%; }
+    #status { margin-left: 0; }
+    .keys { flex-wrap: wrap; }
+  }
 </style>
 </head>
 <body>
@@ -64,17 +71,24 @@
       <button class="ghost" data-key="home">◯ Home</button>
       <button class="ghost" data-key="recents">▢ Recents</button>
       <button class="ghost" data-key="notifications">▾ Notif</button>
+      <button class="ghost" data-key="volup">🔊+</button>
+      <button class="ghost" data-key="voldown">🔉−</button>
+      <button class="ghost" data-key="lock">🔒 Lock</button>
+      <button class="ghost" data-key="power">⏻ Power</button>
     </div>
     <input id="textbox" placeholder="type text, press Enter to send to focused field" />
     <select id="quality" class="ghost" title="stream quality">
+      <option value="auto" selected>Auto</option>
       <option value="low">Low</option>
-      <option value="medium" selected>Medium</option>
+      <option value="medium">Medium</option>
       <option value="high">High</option>
     </select>
     <button id="clipBtn" class="ghost" title="send the text box to the phone's clipboard">Clipboard</button>
     <label class="ghost" style="padding:7px 13px;border-radius:7px;cursor:pointer;">
       Send file<input id="fileInput" type="file" style="display:none" />
     </label>
+    <button id="recBtn" class="ghost" title="record the stream to a file">● Rec</button>
+    <button id="fsBtn" class="ghost" title="fullscreen">⛶</button>
   </footer>
 
 <script type="module">
@@ -147,6 +161,10 @@ function onControl(msg) {
       setStatus(`file saved on phone: ${msg.name} (Downloads)`); break;
     case 'file_error':
       setStatus('file transfer failed'); break;
+    case 'autoq':
+      // Phone changed quality on its own; reflect it without firing change.
+      $('#quality').value = 'auto';
+      setStatus(`auto quality: ${msg.level}`); break;
   }
 }
 
@@ -255,6 +273,44 @@ $('#fileInput').addEventListener('change', async e => {
   }
   send({ t: 'file_end' });
   e.target.value = '';
+});
+
+// Drag-and-drop a file onto the screen to upload it.
+['dragover', 'drop'].forEach(ev => canvas.addEventListener(ev, e => e.preventDefault()));
+canvas.addEventListener('drop', e => {
+  const f = e.dataTransfer?.files?.[0];
+  if (f) { $('#fileInput').files = e.dataTransfer.files; $('#fileInput').dispatchEvent(new Event('change')); }
+});
+
+// Record the live view to a .webm file.
+let recorder = null, recChunks = [];
+$('#recBtn').addEventListener('click', () => {
+  if (recorder) { recorder.stop(); return; }
+  const stream = canvas.captureStream(30);
+  recChunks = [];
+  recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+  recorder.ondataavailable = e => { if (e.data.size) recChunks.push(e.data); };
+  recorder.onstop = () => {
+    const blob = new Blob(recChunks, { type: 'video/webm' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `remotedroid-${Date.now()}.webm`;
+    a.click();
+    recorder = null; $('#recBtn').textContent = '● Rec'; $('#recBtn').style.color = '';
+  };
+  recorder.start();
+  $('#recBtn').textContent = '■ Stop'; $('#recBtn').style.color = '#ff5c5c';
+});
+
+$('#fsBtn').addEventListener('click', () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.querySelector('main').requestFullscreen?.();
+});
+
+// Keyboard: Escape -> Back (when not typing in a field).
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'Escape') send({ t: 'key', k: 'back' });
 });
 
 function setButtons(on) {

@@ -56,18 +56,36 @@ class RemoteInputService : AccessibilityService() {
         dispatchGesture(gesture, null, null)
     }
 
-    /** One of: back, home, recents, notifications, power (lock screen via dialog). */
+    /** Back, home, recents, notifications, power, lock, and volume keys. */
     fun globalKey(key: String) {
+        when (key) {
+            "volup", "voldown", "mute" -> { volume(key); return }
+        }
         val action = when (key) {
             "back" -> GLOBAL_ACTION_BACK
             "home" -> GLOBAL_ACTION_HOME
             "recents" -> GLOBAL_ACTION_RECENTS
             "notifications" -> GLOBAL_ACTION_NOTIFICATIONS
+            "quicksettings" -> GLOBAL_ACTION_QUICK_SETTINGS
             "power" -> GLOBAL_ACTION_POWER_DIALOG
             "lock" -> GLOBAL_ACTION_LOCK_SCREEN
             else -> return
         }
         performGlobalAction(action)
+    }
+
+    private fun volume(key: String) {
+        val am = getSystemService(android.content.Context.AUDIO_SERVICE)
+                as android.media.AudioManager
+        val dir = when (key) {
+            "volup" -> android.media.AudioManager.ADJUST_RAISE
+            "voldown" -> android.media.AudioManager.ADJUST_LOWER
+            else -> android.media.AudioManager.ADJUST_TOGGLE_MUTE
+        }
+        am.adjustStreamVolume(
+            android.media.AudioManager.STREAM_MUSIC, dir,
+            android.media.AudioManager.FLAG_SHOW_UI
+        )
     }
 
     /** Replace the text of the currently focused editable field. */

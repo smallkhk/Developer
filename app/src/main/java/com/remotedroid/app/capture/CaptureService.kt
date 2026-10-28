@@ -52,9 +52,21 @@ class CaptureService : Service(), RelayClient.Events {
     @Volatile private var droppingUntilKeyframe = false
 
     // Current streaming quality (changeable live from the browser).
+    private var curLevel = "medium"
     private var curMaxShort = DEFAULT_MAX_SHORT_SIDE
     private var curBitrate = DEFAULT_BITRATE
     private var curFps = DEFAULT_FPS
+
+    // Auto quality: step down when congested, back up when it stays clear.
+    @Volatile private var autoQuality = false
+    @Volatile private var dropsSinceCheck = 0
+    private var clearChecks = 0
+    private val autoRunnable = object : Runnable {
+        override fun run() {
+            if (autoQuality) evaluateAutoQuality()
+            main.postDelayed(this, AUTO_INTERVAL_MS)
+        }
+    }
 
     private val fileReceiver by lazy { FileReceiver(this) }
     private val main = Handler(Looper.getMainLooper())
@@ -72,6 +84,7 @@ class CaptureService : Service(), RelayClient.Events {
         projectionManager =
             getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         readScreenMetrics()
+        main.postDelayed(autoRunnable, AUTO_INTERVAL_MS)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -161,18 +174,69 @@ class CaptureService : Service(), RelayClient.Events {
         fileReceiver.chunk(data)
     }
 
-    /** Apply a quality preset and restart the encoder (keeps the projection). */
+    /** Apply a quality preset. "auto" lets the app pick and adapt. */
     private fun setQuality(level: String) {
+        if (level == "auto") {
+            autoQuality = true
+            applyLevel("medium")
+        } else {
+            autoQuality = false
+            applyLevel(level)
+        }
+    }
+
+    private val levels = listOf("low", "medium", "high")
+
+    private fun applyLevel(level: String) {
+        if (level == curLevel && encoder != null) return
+        curLevel = level
         when (level) {
             "low" -> { curMaxShort = 480; curBitrate = 1_000_000; curFps = 20 }
             "high" -> { curMaxShort = 1080; curBitrate = 5_000_000; curFps = 30 }
             else -> { curMaxShort = 720; curBitrate = 2_500_000; curFps = 30 }
         }
-        if (!paused && encoder != null) {
-            encoder?.stop()
-            encoder = null
-            startEncoderIfNeeded()
-            encoder?.requestKeyFrame()
+        restartEncoder()
+    }
+
+    /** Restart the encoder in place (new resolution/fps) without touching the
+     *  MediaProjection, so no re-approval is needed. */
+    private fun restartEncoder() {
+        if (paused || encoder == null) return
+        encoder?.stop()
+        encoder = null
+        startEncoderIfNeeded()
+        encoder?.requestKeyFrame()
+    }
+
+    private fun evaluateAutoQuality() {
+        val drops = dropsSinceCheck
+        dropsSinceCheck = 0
+        val idx = levels.indexOf(curLevel).coerceAtLeast(0)
+        if (drops > 2 && idx > 0) {
+            clearChecks = 0
+            applyLevel(levels[idx - 1])          // congested: step down
+            relay?.sendJson(JSONObject().put("t", "autoq").put("level", curLevel))
+        } else if (drops == 0) {
+            clearChecks++
+            if (clearChecks >= 4 && idx < levels.size - 1) {   // stable: step up
+                clearChecks = 0
+                applyLevel(levels[idx + 1])
+                relay?.sendJson(JSONObject().put("t", "autoq").put("level", curLevel))
+            }
+        } else {
+            clearChecks = 0
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Screen likely rotated: re-read size and restart the encoder so the
+        // browser gets correctly-shaped frames.
+        val oldW = screenW; val oldH = screenH
+        readScreenMetrics()
+        if ((screenW != oldW || screenH != oldH) && !paused && encoder != null) {
+            restartEncoder()
+            relay?.sendJson(JSONObject().put("t", "meta").put("w", screenW).put("h", screenH))
         }
     }
 
@@ -220,6 +284,7 @@ class CaptureService : Service(), RelayClient.Events {
                 // Network is behind: drop this delta and ask for a fresh
                 // keyframe so the browser jumps straight to the latest screen.
                 droppingUntilKeyframe = true
+                dropsSinceCheck++
                 encoder?.requestKeyFrame()
             } else {
                 sendFramed(2, data)
@@ -275,6 +340,7 @@ class CaptureService : Service(), RelayClient.Events {
     }
 
     override fun onDestroy() {
+        main.removeCallbacks(autoRunnable)
         stopEverything()
         super.onDestroy()
     }
@@ -365,6 +431,8 @@ class CaptureService : Service(), RelayClient.Events {
         private const val DEFAULT_FPS = 30
         // Drop frames once this many bytes are waiting to be sent.
         private const val MAX_QUEUE_BYTES = 512_000L
+        // How often auto-quality reviews congestion.
+        private const val AUTO_INTERVAL_MS = 3_000L
 
         const val ACTION_STOP = "com.remotedroid.app.STOP"
         const val EXTRA_RESULT_CODE = "result_code"
