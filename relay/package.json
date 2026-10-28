@@ -1,0 +1,16 @@
+{
+  "name": "remotedroid-relay",
+  "version": "1.0.0",
+  "description": "WebSocket relay that pairs a RemoteDroid phone and browser in a room.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

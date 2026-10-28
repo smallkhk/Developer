@@ -1,0 +1,26 @@
+[Unit]
+Description=RemoteDroid WebSocket relay
+After=network.target
+
+[Service]
+Type=simple
+# Run as a non-root user you created (see README). Adjust paths if different.
+User=relay
+WorkingDirectory=/opt/remotedroid-relay
+ExecStart=/usr/bin/node /opt/remotedroid-relay/server.js
+Restart=always
+RestartSec=3
+Environment=PORT=8080
+Environment=HOST=127.0.0.1
+# Uncomment and set to require ?k=<secret> on every connection:
+# Environment=RELAY_SECRET=change-me-to-a-long-random-string
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/remotedroid-relay
+
+[Install]
+WantedBy=multi-user.target
